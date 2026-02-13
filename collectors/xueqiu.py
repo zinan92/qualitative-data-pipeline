@@ -1,6 +1,11 @@
-"""Xueqiu (雪球) collector — hot timeline + KOL feeds."""
+"""Xueqiu (雪球) collector — hot timeline + KOL feeds.
+
+Timeline API (public_timeline_by_category) works with plain requests + cookie.
+User timeline API is behind Alibaba Cloud WAF → requires Playwright stealth.
+"""
 
 import html
+import json
 import logging
 import re
 import time
@@ -15,8 +20,12 @@ from config import XUEQIU_COOKIE, XUEQIU_KOL_IDS
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://xueqiu.com"
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "User-Agent": _USER_AGENT,
     "Accept": "application/json",
     "Referer": "https://xueqiu.com/",
 }
@@ -44,6 +53,21 @@ def _ms_to_datetime(ms: int | None) -> datetime | None:
         return None
 
 
+def _parse_cookies(cookie_str: str) -> list[dict]:
+    """Parse cookie string into Playwright cookie dicts."""
+    cookies = []
+    for part in cookie_str.split("; "):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookies.append({
+                "name": k.strip(),
+                "value": v.strip(),
+                "domain": ".xueqiu.com",
+                "path": "/",
+            })
+    return cookies
+
+
 class XueqiuCollector(BaseCollector):
     """Collect posts from Xueqiu (雪球)."""
 
@@ -56,11 +80,14 @@ class XueqiuCollector(BaseCollector):
         if XUEQIU_COOKIE:
             self._session.headers["Cookie"] = XUEQIU_COOKIE
         else:
-            # Visit homepage to get session cookie
             try:
                 self._session.get(_BASE_URL, timeout=10)
             except requests.RequestException:
                 logger.warning("Failed to initialize Xueqiu session")
+
+    # ------------------------------------------------------------------
+    # Timeline (requests — no WAF issues)
+    # ------------------------------------------------------------------
 
     def _fetch_timeline(self, category_id: int, count: int = 20) -> list[dict[str, Any]]:
         """Fetch public timeline by category."""
@@ -80,43 +107,99 @@ class XueqiuCollector(BaseCollector):
 
         articles: list[dict[str, Any]] = []
         for item in data.get("list", []):
-            article = self._parse_status(item)
+            # Timeline wraps status in a JSON string under "data"
+            raw_data = item.get("data")
+            if isinstance(raw_data, str):
+                try:
+                    status = json.loads(raw_data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            elif isinstance(raw_data, dict):
+                status = raw_data
+            else:
+                status = item  # fallback
+
+            article = self._parse_status(status)
             if article:
                 articles.append(article)
 
         return articles
 
-    def _fetch_user_timeline(
-        self,
-        user_id: str,
-        count: int = 10,
-        kol_tag: str | None = None,
-        kol_name: str | None = None,
+    # ------------------------------------------------------------------
+    # KOL user timeline (Playwright stealth — WAF bypass)
+    # ------------------------------------------------------------------
+
+    def _fetch_kol_timelines_playwright(
+        self, kols: list[dict[str, str]], count: int = 10
     ) -> list[dict[str, Any]]:
-        """Fetch a user's timeline."""
-        url = f"{_BASE_URL}/v4/statuses/user_timeline.json"
-        params = {"user_id": user_id, "page": 1, "count": count}
+        """Fetch multiple KOL timelines using Playwright stealth to bypass WAF."""
+        try:
+            from playwright.sync_api import sync_playwright
+            from playwright_stealth import Stealth
+        except ImportError:
+            logger.error(
+                "playwright / playwright-stealth not installed. "
+                "Run: pip install playwright playwright-stealth && playwright install chromium"
+            )
+            return []
+
+        all_articles: list[dict[str, Any]] = []
+        stealth = Stealth()
 
         try:
-            resp = self._session.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as e:
-            logger.error("Xueqiu user timeline failed for %s: %s", user_id, e)
-            return []
-        except ValueError:
-            logger.error("Xueqiu user timeline returned non-JSON for %s", user_id)
-            return []
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context(user_agent=_USER_AGENT)
 
-        articles: list[dict[str, Any]] = []
-        for item in data.get("statuses", data.get("list", [])):
-            article = self._parse_status(item)
-            if article:
-                if kol_tag and kol_tag not in article["tags"]:
-                    article["tags"].append(kol_tag)
-                articles.append(article)
+                if XUEQIU_COOKIE:
+                    ctx.add_cookies(_parse_cookies(XUEQIU_COOKIE))
 
-        return articles
+                page = ctx.new_page()
+                stealth.apply_stealth_sync(page)
+
+                # Load homepage first to pass WAF challenge
+                logger.info("Loading Xueqiu homepage for WAF init...")
+                page.goto(f"{_BASE_URL}/", timeout=15000, wait_until="domcontentloaded")
+                page.wait_for_timeout(5000)
+
+                for kol in kols:
+                    kol_id, kol_name, kol_tag = kol["id"], kol["name"], kol["tag"]
+                    logger.info("Fetching Xueqiu KOL %s (%s) via Playwright", kol_name, kol_id)
+
+                    url = (
+                        f"{_BASE_URL}/v4/statuses/user_timeline.json"
+                        f"?user_id={kol_id}&page=1&count={count}"
+                    )
+                    try:
+                        page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                        page.wait_for_timeout(2000)
+                        text = page.inner_text("body")
+                        data = json.loads(text)
+                    except Exception as e:
+                        logger.error("Playwright fetch failed for KOL %s: %s", kol_name, e)
+                        continue
+
+                    statuses = data.get("statuses", data.get("list", []))
+                    for item in statuses:
+                        article = self._parse_status(item)
+                        if article:
+                            if kol_tag and kol_tag not in article["tags"]:
+                                article["tags"].append(kol_tag)
+                            all_articles.append(article)
+
+                    logger.info("Got %d posts from KOL %s", len(statuses), kol_name)
+                    time.sleep(1)  # Be polite
+
+                browser.close()
+
+        except Exception as e:
+            logger.error("Playwright session failed: %s", e)
+
+        return all_articles
+
+    # ------------------------------------------------------------------
+    # Parsing
+    # ------------------------------------------------------------------
 
     def _parse_status(self, item: dict[str, Any]) -> dict[str, Any] | None:
         """Parse a Xueqiu status into an article dict."""
@@ -126,7 +209,9 @@ class XueqiuCollector(BaseCollector):
 
         user = item.get("user", {}) or {}
         author = user.get("screen_name", "")
-        text = item.get("text", "") or ""
+
+        # Content: prefer "text", fall back to "description"
+        text = item.get("text", "") or item.get("description", "") or ""
         text = _strip_html(text)
 
         if not text:
@@ -134,8 +219,11 @@ class XueqiuCollector(BaseCollector):
 
         title = item.get("title") or ""
         if not title:
-            # Use first 100 chars of content as title
             title = text[:100]
+
+        # Build URL
+        user_id = user.get("id", "") or item.get("user_id", "")
+        url = f"https://xueqiu.com/{user_id}/{post_id}" if user_id else f"https://xueqiu.com/0/{post_id}"
 
         return {
             "source": self.source,
@@ -143,31 +231,31 @@ class XueqiuCollector(BaseCollector):
             "author": author,
             "title": title,
             "content": text,
-            "url": f"https://xueqiu.com/{user.get('id', '')}/{post_id}",
+            "url": url,
             "tags": [],
             "score": item.get("reply_count", 0) or 0,
             "published_at": _ms_to_datetime(item.get("created_at")),
         }
 
+    # ------------------------------------------------------------------
+    # Main collect
+    # ------------------------------------------------------------------
+
     def collect(self) -> list[dict[str, Any]]:
         """Collect from hot timelines + KOL feeds."""
         all_articles: list[dict[str, Any]] = []
 
-        # 1. Hot timelines
+        # 1. Hot timelines (requests — fast, no WAF)
         for name, cat_id in _CATEGORIES.items():
             logger.info("Fetching Xueqiu %s timeline", name)
             articles = self._fetch_timeline(cat_id)
             all_articles.extend(articles)
             logger.info("Got %d posts from Xueqiu %s", len(articles), name)
-            time.sleep(1)  # Be polite
+            time.sleep(1)
 
-        # 2. KOL feeds
-        for kol in XUEQIU_KOL_IDS:
-            kol_id, kol_name, kol_tag = kol["id"], kol["name"], kol["tag"]
-            logger.info("Fetching Xueqiu KOL %s (%s)", kol_name, kol_id)
-            articles = self._fetch_user_timeline(kol_id, kol_tag=kol_tag, kol_name=kol_name)
-            all_articles.extend(articles)
-            logger.info("Got %d posts from KOL %s", len(articles), kol_name)
-            time.sleep(2)
+        # 2. KOL feeds (Playwright stealth — WAF bypass)
+        if XUEQIU_KOL_IDS:
+            kol_articles = self._fetch_kol_timelines_playwright(XUEQIU_KOL_IDS)
+            all_articles.extend(kol_articles)
 
         return all_articles
