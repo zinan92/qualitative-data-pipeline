@@ -74,6 +74,9 @@ class XueqiuCollector(BaseCollector):
         except requests.RequestException as e:
             logger.error("Xueqiu timeline request failed: %s", e)
             return []
+        except ValueError:
+            logger.error("Xueqiu timeline returned non-JSON response")
+            return []
 
         articles: list[dict[str, Any]] = []
         for item in data.get("list", []):
@@ -100,6 +103,9 @@ class XueqiuCollector(BaseCollector):
             data = resp.json()
         except requests.RequestException as e:
             logger.error("Xueqiu user timeline failed for %s: %s", user_id, e)
+            return []
+        except ValueError:
+            logger.error("Xueqiu user timeline returned non-JSON for %s", user_id)
             return []
 
         articles: list[dict[str, Any]] = []

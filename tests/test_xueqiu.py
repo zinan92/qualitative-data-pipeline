@@ -1,6 +1,5 @@
 """Tests for Xueqiu collector (mocked HTTP)."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
