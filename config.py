@@ -22,9 +22,9 @@ TWITTER_TIMELINE_COUNT: int = 100
 
 # --- Collector: Hacker News ---
 HN_API_BASE = "https://hn.algolia.com/api/v1"
-HN_MIN_SCORE: int = 50
+HN_MIN_SCORE: int = 20
 HN_HITS_PER_PAGE: int = 50
-HN_SEARCH_KEYWORDS: list[str] = ["crypto", "AI", "trading"]
+HN_SEARCH_KEYWORDS: list[str] = ["crypto", "AI", "trading", "LLM", "agent", "Claude", "OpenAI", "semiconductor", "quant", "fintech", "robotics", "automation"]
 
 # --- Collector: Substack ---
 SUBSTACK_FEEDS: dict[str, str] = {
