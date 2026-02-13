@@ -49,8 +49,27 @@ YOUTUBE_CHANNELS: dict[str, str] = {
 
 # --- Collector: Xueqiu ---
 XUEQIU_COOKIE: str = os.getenv("XUEQIU_COOKIE", "")
-XUEQIU_KOL_IDS: list[str] = [
-    # Add Xueqiu user IDs to follow here
+XUEQIU_KOL_IDS: list[dict[str, str]] = [
+    {"name": "不明真相的群众", "id": "1955602780", "tag": "macro"},
+    {"name": "大道无形我有型", "id": "1247347556", "tag": "value"},
+    {"name": "但斌", "id": "1102105103", "tag": "value"},
+    {"name": "唐朝", "id": "8290096439", "tag": "value"},
+    {"name": "DAVID自由之路", "id": "5819606767", "tag": "macro"},
+    {"name": "释老毛", "id": "6146070786", "tag": "value"},
+    {"name": "月风_投资笔记", "id": "8833808060", "tag": "macro"},
+    {"name": "盛丰衍", "id": "2533840321", "tag": "trading"},
+    {"name": "梁宏", "id": "9887656769", "tag": "value"},
+    {"name": "坚信价值", "id": "4206051491", "tag": "value"},
+    {"name": "望京博格", "id": "4579887327", "tag": "tech"},
+    {"name": "呼伦少威", "id": "3755834159", "tag": "tech"},
+    {"name": "ETF拯救世界", "id": "4776750571", "tag": "tech"},
+    {"name": "紫葳侍郎", "id": "2289280338", "tag": "tech"},
+    {"name": "超短线投机者", "id": "4792753218", "tag": "trading"},
+    {"name": "追龙头", "id": "8425285191", "tag": "trading"},
+    {"name": "陈达美股投资", "id": "9598793634", "tag": "us-stock"},
+    {"name": "Ricky", "id": "6654628252", "tag": "us-stock"},
+    {"name": "美股研究社", "id": "3582153332", "tag": "us-stock"},
+    {"name": "仓又加错-刘成岗", "id": "1434679955", "tag": "us-stock"},
 ]
 
 # --- LLM Tagging ---

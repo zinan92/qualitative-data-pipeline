@@ -83,7 +83,13 @@ class XueqiuCollector(BaseCollector):
 
         return articles
 
-    def _fetch_user_timeline(self, user_id: str, count: int = 10) -> list[dict[str, Any]]:
+    def _fetch_user_timeline(
+        self,
+        user_id: str,
+        count: int = 10,
+        kol_tag: str | None = None,
+        kol_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Fetch a user's timeline."""
         url = f"{_BASE_URL}/v4/statuses/user_timeline.json"
         params = {"user_id": user_id, "page": 1, "count": count}
@@ -100,6 +106,8 @@ class XueqiuCollector(BaseCollector):
         for item in data.get("statuses", data.get("list", [])):
             article = self._parse_status(item)
             if article:
+                if kol_tag and kol_tag not in article["tags"]:
+                    article["tags"].append(kol_tag)
                 articles.append(article)
 
         return articles
@@ -148,11 +156,12 @@ class XueqiuCollector(BaseCollector):
             time.sleep(1)  # Be polite
 
         # 2. KOL feeds
-        for user_id in XUEQIU_KOL_IDS:
-            logger.info("Fetching Xueqiu KOL %s", user_id)
-            articles = self._fetch_user_timeline(user_id)
+        for kol in XUEQIU_KOL_IDS:
+            kol_id, kol_name, kol_tag = kol["id"], kol["name"], kol["tag"]
+            logger.info("Fetching Xueqiu KOL %s (%s)", kol_name, kol_id)
+            articles = self._fetch_user_timeline(kol_id, kol_tag=kol_tag, kol_name=kol_name)
             all_articles.extend(articles)
-            logger.info("Got %d posts from KOL %s", len(articles), user_id)
-            time.sleep(1)
+            logger.info("Got %d posts from KOL %s", len(articles), kol_name)
+            time.sleep(2)
 
         return all_articles
