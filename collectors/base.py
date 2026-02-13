@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.database import get_session, init_db
 from db.models import Article
+from tagging import tag_article
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,16 @@ class BaseCollector(ABC):
         for data in articles:
             session = get_session()
             try:
+                # Merge collector tags with keyword-based tags
+                collector_tags = data.get("tags", [])
+                if isinstance(collector_tags, str):
+                    try:
+                        collector_tags = json.loads(collector_tags)
+                    except (json.JSONDecodeError, TypeError):
+                        collector_tags = []
+                keyword_tags = tag_article(data.get("title"), data.get("content"))
+                merged_tags = list(dict.fromkeys(collector_tags + keyword_tags))  # dedup, preserve order
+
                 article = Article(
                     source=data.get("source", self.source),
                     source_id=data.get("source_id"),
@@ -40,7 +51,7 @@ class BaseCollector(ABC):
                     title=data.get("title"),
                     content=data.get("content"),
                     url=data.get("url"),
-                    tags=json.dumps(data["tags"]) if isinstance(data.get("tags"), list) else data.get("tags"),
+                    tags=json.dumps(merged_tags),
                     score=data.get("score", 0),
                     published_at=data.get("published_at"),
                     collected_at=datetime.utcnow(),

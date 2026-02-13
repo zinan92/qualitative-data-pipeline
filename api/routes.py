@@ -1,6 +1,7 @@
 """API routes for park-intel."""
 
 import json
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -13,6 +14,20 @@ from db.models import Article
 router = APIRouter(prefix="/api")
 
 
+def _parse_tags(raw: str | None) -> list[str]:
+    """Parse JSON tags string to list."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(t).lower().strip() for t in parsed if t]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return []
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     """Healthcheck endpoint."""
@@ -23,13 +38,16 @@ def health() -> dict[str, str]:
 def get_latest_articles(
     limit: int = Query(default=20, ge=1, le=200),
     source: str | None = Query(default=None),
+    min_relevance: int | None = Query(default=None, ge=1, le=5),
 ) -> list[dict[str, Any]]:
-    """Get latest articles, optionally filtered by source."""
+    """Get latest articles, optionally filtered by source and min relevance."""
     session = get_session()
     try:
         query = session.query(Article).order_by(Article.collected_at.desc())
         if source:
             query = query.filter(Article.source == source)
+        if min_relevance is not None:
+            query = query.filter(Article.relevance_score >= min_relevance)
         articles = query.limit(limit).all()
         return [_serialize(a) for a in articles]
     finally:
@@ -101,31 +119,175 @@ def get_digest(
 
             # Collect tags from ALL articles in the period (not just limited)
             for a in source_articles:
-                tags = a.tags
-                if isinstance(tags, str):
-                    try:
-                        tags = json.loads(tags)
-                    except (json.JSONDecodeError, TypeError):
-                        tags = []
-                if isinstance(tags, list):
-                    all_tags.extend(str(t).lower().strip() for t in tags if t)
+                all_tags.extend(_parse_tags(a.tags))
 
         # Count tag frequency
-        tag_counts: dict[str, int] = {}
-        for tag in all_tags:
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-        top_tags = sorted(
-            [{"tag": tag, "count": count} for tag, count in tag_counts.items()],
-            key=lambda x: x["count"],
-            reverse=True,
-        )[:30]
+        tag_counts = Counter(all_tags)
+        top_tags = [
+            {"tag": tag, "count": count}
+            for tag, count in tag_counts.most_common(30)
+        ]
 
         return {
             "period": f"last {hours}h",
             "generated_at": datetime.utcnow().isoformat(),
             "sources": sources_out,
             "top_tags": top_tags,
+        }
+    finally:
+        session.close()
+
+
+@router.get("/articles/signals")
+def get_signals(
+    hours: int = Query(default=24, ge=1, le=168),
+    compare_hours: int = Query(default=24, ge=1, le=168),
+    min_relevance: int = Query(default=1, ge=1, le=5),
+    source: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Aggregated signal dashboard: topic heat, narrative momentum, relevance distribution.
+
+    Compares current period (last `hours` h) vs previous period (preceding `compare_hours` h).
+    """
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        current_start = now - timedelta(hours=hours)
+        prev_start = current_start - timedelta(hours=compare_hours)
+
+        # Query current period articles
+        q = session.query(Article).filter(Article.collected_at >= current_start)
+        if source:
+            q = q.filter(Article.source == source)
+        current_articles = q.all()
+
+        # Query previous period articles
+        q_prev = session.query(Article).filter(
+            Article.collected_at >= prev_start,
+            Article.collected_at < current_start,
+        )
+        if source:
+            q_prev = q_prev.filter(Article.source == source)
+        prev_articles = q_prev.all()
+
+        # --- Topic Heat ---
+        current_tag_counts = Counter[str]()
+        for a in current_articles:
+            current_tag_counts.update(_parse_tags(a.tags))
+
+        prev_tag_counts = Counter[str]()
+        for a in prev_articles:
+            prev_tag_counts.update(_parse_tags(a.tags))
+
+        all_tags = set(current_tag_counts) | set(prev_tag_counts)
+        topic_heat = []
+        for tag in all_tags:
+            cur = current_tag_counts.get(tag, 0)
+            prev = prev_tag_counts.get(tag, 0)
+            if prev > 0:
+                momentum = round((cur - prev) / prev, 2)
+            elif cur > 0:
+                momentum = 1.0  # new topic
+            else:
+                momentum = 0.0
+
+            if momentum > 0.2:
+                label = "accelerating"
+            elif momentum < -0.2:
+                label = "decelerating"
+            else:
+                label = "stable"
+
+            topic_heat.append({
+                "tag": tag,
+                "current_count": cur,
+                "previous_count": prev,
+                "momentum": momentum,
+                "momentum_label": label,
+            })
+
+        topic_heat.sort(key=lambda x: x["current_count"], reverse=True)
+
+        # --- Narrative Momentum ---
+        narrative_data: dict[str, dict[str, Any]] = {}
+        for a in current_articles:
+            ntags = _parse_tags(a.narrative_tags)
+            for nt in ntags:
+                if nt not in narrative_data:
+                    narrative_data[nt] = {
+                        "count": 0,
+                        "total_relevance": 0,
+                        "scored_count": 0,
+                        "sources": set(),
+                    }
+                narrative_data[nt]["count"] += 1
+                narrative_data[nt]["sources"].add(a.source)
+                if a.relevance_score is not None:
+                    narrative_data[nt]["total_relevance"] += a.relevance_score
+                    narrative_data[nt]["scored_count"] += 1
+
+        narrative_momentum = []
+        for nt, data in narrative_data.items():
+            avg_rel = round(data["total_relevance"] / data["scored_count"], 1) if data["scored_count"] > 0 else None
+            narrative_momentum.append({
+                "narrative_tag": nt,
+                "count": data["count"],
+                "avg_relevance": avg_rel,
+                "sources": sorted(data["sources"]),
+            })
+        narrative_momentum.sort(key=lambda x: x["count"], reverse=True)
+
+        # --- Relevance Distribution ---
+        rel_dist: dict[str, int] = {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "unscored": 0}
+        for a in current_articles:
+            if a.relevance_score is not None and 1 <= a.relevance_score <= 5:
+                rel_dist[str(a.relevance_score)] += 1
+            else:
+                rel_dist["unscored"] += 1
+
+        # --- Source Activity ---
+        source_data: dict[str, dict[str, Any]] = {}
+        for a in current_articles:
+            if a.source not in source_data:
+                source_data[a.source] = {"count": 0, "total_relevance": 0, "scored_count": 0}
+            source_data[a.source]["count"] += 1
+            if a.relevance_score is not None:
+                source_data[a.source]["total_relevance"] += a.relevance_score
+                source_data[a.source]["scored_count"] += 1
+
+        source_activity = []
+        for src, data in source_data.items():
+            avg_rel = round(data["total_relevance"] / data["scored_count"], 1) if data["scored_count"] > 0 else None
+            source_activity.append({
+                "source": src,
+                "count": data["count"],
+                "avg_relevance": avg_rel,
+            })
+        source_activity.sort(key=lambda x: x["count"], reverse=True)
+
+        # --- High relevance count ---
+        high_relevance_count = sum(
+            1 for a in current_articles
+            if a.relevance_score is not None and a.relevance_score >= 4
+        )
+
+        # --- Top Articles ---
+        relevant_articles = [
+            a for a in current_articles
+            if a.relevance_score is not None and a.relevance_score >= min_relevance
+        ]
+        relevant_articles.sort(key=lambda a: a.relevance_score or 0, reverse=True)
+        top_articles = [_serialize(a) for a in relevant_articles[:20]]
+
+        return {
+            "period": f"last {hours}h",
+            "article_count": len(current_articles),
+            "high_relevance_count": high_relevance_count,
+            "topic_heat": topic_heat[:20],
+            "narrative_momentum": narrative_momentum[:20],
+            "relevance_distribution": rel_dist,
+            "source_activity": source_activity,
+            "top_articles": top_articles,
         }
     finally:
         session.close()
@@ -148,12 +310,8 @@ def get_sources() -> list[dict[str, Any]]:
 
 def _serialize(article: Article) -> dict[str, Any]:
     """Serialize an Article to a dict."""
-    tags = article.tags
-    if isinstance(tags, str):
-        try:
-            tags = json.loads(tags)
-        except (json.JSONDecodeError, TypeError):
-            tags = []
+    tags = _parse_tags(article.tags)
+    narrative_tags = _parse_tags(article.narrative_tags)
 
     return {
         "id": article.id,
@@ -165,6 +323,8 @@ def _serialize(article: Article) -> dict[str, Any]:
         "url": article.url,
         "tags": tags,
         "score": article.score,
+        "relevance_score": article.relevance_score,
+        "narrative_tags": narrative_tags,
         "published_at": article.published_at.isoformat() if article.published_at else None,
         "collected_at": article.collected_at.isoformat() if article.collected_at else None,
     }

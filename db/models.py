@@ -24,6 +24,8 @@ class Article(Base):
     url: Mapped[str | None] = mapped_column(String)
     tags: Mapped[str | None] = mapped_column(String)  # JSON array
     score: Mapped[int] = mapped_column(Integer, default=0)
+    relevance_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5 LLM rating
+    narrative_tags: Mapped[str | None] = mapped_column(String, nullable=True)  # JSON array from LLM
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

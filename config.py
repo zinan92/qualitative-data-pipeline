@@ -1,6 +1,11 @@
 """park-intel configuration."""
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
 
 # --- Paths ---
 BASE_DIR = Path(__file__).parent
@@ -41,3 +46,12 @@ YOUTUBE_CHANNELS: dict[str, str] = {
     "AI LABS": "UCelfWQr9sXVMTvBzviPGlFw",
     "Peter Yang": "UCnpBg7yqNauHtlNSpOl5-cg",
 }
+
+# --- Collector: Xueqiu ---
+XUEQIU_COOKIE: str = os.getenv("XUEQIU_COOKIE", "")
+XUEQIU_KOL_IDS: list[str] = [
+    # Add Xueqiu user IDs to follow here
+]
+
+# --- LLM Tagging ---
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

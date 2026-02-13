@@ -29,6 +29,9 @@ def get_session() -> Session:
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, then run migrations."""
+    from db.migrations import run_migrations
+
     engine = get_engine()
     Base.metadata.create_all(engine)
+    run_migrations(engine)
