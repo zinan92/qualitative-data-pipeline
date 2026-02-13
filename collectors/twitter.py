@@ -1,4 +1,4 @@
-"""Twitter collector using the bird CLI — timeline-based."""
+"""Twitter collector using the bird CLI — account-based (38 followed accounts only)."""
 
 import json
 import logging
@@ -11,11 +11,8 @@ from collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
 
-# How many tweets to pull from the For You timeline each run
-TIMELINE_COUNT = 40
-
-# Must-follow accounts — always collect their latest tweets
-PINNED_ACCOUNTS = [
+# Followed accounts — ONLY these 38 accounts, no timeline
+FOLLOWED_ACCOUNTS = [
     # Global KOL
     "elonmusk",
     "realDonaldTrump",
@@ -188,22 +185,15 @@ class TwitterCollector(BaseCollector):
             return []
 
     def collect(self) -> list[dict[str, Any]]:
-        """Collect tweets from timeline + pinned accounts."""
+        """Collect tweets from followed accounts only (no timeline)."""
         if not self._bird_path:
             logger.info("bird CLI not available — skipping Twitter collection")
             return []
 
         all_articles: list[dict[str, Any]] = []
 
-        # 1. For You timeline
-        logger.info("Fetching For You timeline (%d tweets)", TIMELINE_COUNT)
-        articles = self._fetch_timeline()
-        all_articles.extend(articles)
-        logger.info("Got %d tweets from timeline", len(articles))
-
-        # 2. Pinned accounts
-        for account in PINNED_ACCOUNTS:
-            logger.info("Fetching pinned account @%s", account)
+        for account in FOLLOWED_ACCOUNTS:
+            logger.info("Fetching @%s", account)
             articles = self._fetch_account(account)
             all_articles.extend(articles)
             logger.info("Got %d tweets from @%s", len(articles), account)
