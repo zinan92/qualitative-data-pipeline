@@ -12,13 +12,8 @@ API_HOST = "127.0.0.1"
 API_PORT = 8001
 
 # --- Collector: Twitter ---
-TWITTER_ACCOUNTS: list[str] = [
-    "xiaomucrypto",
-    "coolish",
-    "ohxiyu",
-    "billtheinvestor",
-]
-TWITTER_MAX_TWEETS_PER_ACCOUNT: int = 20
+# Now timeline-based (bird home), no fixed account list needed
+TWITTER_TIMELINE_COUNT: int = 100
 
 # --- Collector: Hacker News ---
 HN_API_BASE = "https://hn.algolia.com/api/v1"
@@ -35,4 +30,14 @@ SUBSTACK_FEEDS: dict[str, str] = {
     "Interconnects": "https://www.interconnects.ai/feed",
     "Dwarkesh Patel": "https://www.dwarkeshpatel.com/feed",
     "SemiAnalysis": "https://semianalysis.substack.com/feed",
+}
+
+# --- Collector: YouTube ---
+YOUTUBE_CHANNELS: dict[str, str] = {
+    "Alex Finn": "UCfQNB91qRP_5ILeu_S_bSkg",
+    "AI超元域": "UCIomFkAj4Vq_rGX2Jot7D8A",
+    "Eric Tech": "UCOXRjenlq9PmlTqd_JhAbMQ",
+    "Y Combinator": "UCcefcZRL2oaA_uBNeo5UOWg",
+    "AI LABS": "UCelfWQr9sXVMTvBzviPGlFw",
+    "Peter Yang": "UCnpBg7yqNauHtlNSpOl5-cg",
 }

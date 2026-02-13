@@ -29,10 +29,10 @@ class BaseCollector(ABC):
 
     def save(self, articles: list[dict[str, Any]]) -> int:
         """Save articles to DB with dedup. Returns count of new articles saved."""
-        session = get_session()
         saved = 0
-        try:
-            for data in articles:
+        for data in articles:
+            session = get_session()
+            try:
                 article = Article(
                     source=data.get("source", self.source),
                     source_id=data.get("source_id"),
@@ -46,19 +46,16 @@ class BaseCollector(ABC):
                     collected_at=datetime.utcnow(),
                 )
                 session.add(article)
-                try:
-                    session.flush()
-                    saved += 1
-                except IntegrityError:
-                    session.rollback()
-                    logger.debug("Duplicate skipped: %s", data.get("source_id"))
-            session.commit()
-        except Exception:
-            session.rollback()
-            logger.exception("Error saving articles for %s", self.source)
-            raise
-        finally:
-            session.close()
+                session.commit()
+                saved += 1
+            except IntegrityError:
+                session.rollback()
+                logger.debug("Duplicate skipped: %s", data.get("source_id"))
+            except Exception:
+                session.rollback()
+                logger.exception("Error saving article %s for %s", data.get("source_id"), self.source)
+            finally:
+                session.close()
 
         logger.info("[%s] Saved %d new articles (of %d fetched)", self.source, saved, len(articles))
         return saved

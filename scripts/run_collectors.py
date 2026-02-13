@@ -12,11 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from collectors.hackernews import HackerNewsCollector
 from collectors.substack import SubstackCollector
 from collectors.twitter import TwitterCollector
+from collectors.youtube import YouTubeCollector
 
 COLLECTORS: dict[str, type] = {
     "twitter": TwitterCollector,
     "hackernews": HackerNewsCollector,
     "substack": SubstackCollector,
+    "youtube": YouTubeCollector,
 }
 
 
