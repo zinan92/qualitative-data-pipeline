@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Run LLM tagger on articles that haven't been scored yet."""
+"""Run LLM tagger on articles that haven't been scored yet.
+
+Uses Claude Code CLI (claude -p) — no API key needed.
+"""
 
 import argparse
 import json
@@ -8,6 +11,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from sqlalchemy import func
 
 from db.database import get_session, init_db
 from db.models import Article
@@ -26,7 +31,6 @@ def main() -> None:
     parser.add_argument("--backfill", action="store_true", help="Process all unscored articles")
     parser.add_argument("--limit", type=int, default=0, help="Process N most recent unscored articles")
     parser.add_argument("--batch-size", type=int, default=10, help="Articles per LLM call")
-    parser.add_argument("--budget", type=float, default=5.0, help="Max spend per session ($)")
     args = parser.parse_args()
 
     if not args.backfill and args.limit <= 0:
@@ -34,7 +38,7 @@ def main() -> None:
 
     init_db()
     session = get_session()
-    tagger = LLMTagger(batch_size=args.batch_size, daily_budget=args.budget)
+    tagger = LLMTagger(batch_size=args.batch_size)
 
     try:
         query = session.query(Article).filter(Article.relevance_score.is_(None))
@@ -74,14 +78,14 @@ def main() -> None:
 
             session.commit()
             logger.info(
-                "Batch %d: scored %d/%d articles (session cost: $%.4f)",
+                "Batch %d: scored %d/%d articles (%d batches total)",
                 i // args.batch_size + 1,
                 len(results),
                 len(batch),
-                tagger.session_cost,
+                tagger.batches_processed,
             )
 
-        logger.info("Done. Total scored: %d. Session cost: $%.4f", scored, tagger.session_cost)
+        logger.info("Done. Total scored: %d", scored)
 
         # Distribution check
         rows = session.execute(
@@ -98,5 +102,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    from sqlalchemy import func
     main()

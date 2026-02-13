@@ -1,15 +1,44 @@
-"""LLM-based article tagger using Claude for relevance scoring and narrative tagging."""
+"""LLM-based article tagger using Claude Code CLI for relevance scoring and narrative tagging."""
 
 import json
 import logging
+import os
+import subprocess
 import time
 from typing import Any
 
-from anthropic import Anthropic
-
-from config import ANTHROPIC_API_KEY
-
 logger = logging.getLogger(__name__)
+
+
+def _extract_json_array(text: str) -> list[dict]:
+    """Extract a JSON array from text that may contain surrounding prose or markdown."""
+    import re
+
+    # Try direct parse first
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code block
+    m = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Try finding a bare JSON array in the text
+    m = re.search(r"\[[\s\S]*\]", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No JSON array found in response", text, 0)
 
 _SYSTEM_PROMPT = """You are a trading analyst assistant. For each article, you must:
 
@@ -35,21 +64,17 @@ Example response:
 
 Respond ONLY with the JSON array, no other text."""
 
-# Rate limit: 40 RPM → 1.5s between calls
-_MIN_INTERVAL = 1.5
+# Pause between CLI calls to avoid hammering
+_MIN_INTERVAL = 2.0
 
 
 class LLMTagger:
-    """Batch LLM tagger using Claude Sonnet."""
+    """Batch LLM tagger using Claude Code CLI."""
 
-    def __init__(self, batch_size: int = 10, daily_budget: float = 5.0) -> None:
-        if not ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY not set in .env")
-        self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    def __init__(self, batch_size: int = 10) -> None:
         self.batch_size = batch_size
-        self.daily_budget = daily_budget
         self._last_call = 0.0
-        self._session_cost = 0.0
+        self._batches_processed = 0
 
     def _rate_limit(self) -> None:
         elapsed = time.time() - self._last_call
@@ -65,11 +90,7 @@ class LLMTagger:
         if not articles:
             return []
 
-        if self._session_cost >= self.daily_budget:
-            logger.warning("Daily budget ($%.2f) reached, skipping batch", self.daily_budget)
-            return []
-
-        # Build user message with articles
+        # Build prompt with articles
         parts = []
         for a in articles:
             title = a.get("title") or "(no title)"
@@ -77,30 +98,32 @@ class LLMTagger:
             source = a.get("source", "unknown")
             parts.append(f"[Article ID={a['id']}, source={source}]\nTitle: {title}\nContent: {content}\n")
 
-        user_msg = "\n---\n".join(parts)
+        user_msg = _SYSTEM_PROMPT + "\n\nHere are the articles to score:\n\n" + "\n---\n".join(parts)
 
         self._rate_limit()
         try:
-            response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
+            # Clear CLAUDECODE env var to allow nested CLI calls
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            result = subprocess.run(
+                ["claude", "-p", user_msg, "--output-format", "json", "--model", "sonnet"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
             )
 
-            # Track cost estimate (Sonnet: ~$3/M input, ~$15/M output)
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
-            self._session_cost += cost
-            logger.debug("Batch cost: $%.4f (session total: $%.4f)", cost, self._session_cost)
+            if result.returncode != 0:
+                logger.error("claude CLI failed: %s", result.stderr.strip())
+                return []
 
-            # Parse response
-            text = response.content[0].text.strip()
-            # Handle markdown code blocks
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            results = json.loads(text)
+            # claude --output-format json wraps response in {"type":"result","result":"..."}
+            outer = json.loads(result.stdout)
+            text = outer.get("result", result.stdout).strip()
+
+            # Sonnet may include analysis text before the JSON array.
+            # Extract the JSON array from wherever it appears.
+            results = _extract_json_array(text)
+            self._batches_processed += 1
 
             # Validate
             valid = []
@@ -120,10 +143,13 @@ class LLMTagger:
         except json.JSONDecodeError as e:
             logger.error("Failed to parse LLM response: %s", e)
             return []
+        except subprocess.TimeoutExpired:
+            logger.error("claude CLI timed out")
+            return []
         except Exception as e:
-            logger.error("LLM API call failed: %s", e)
+            logger.error("claude CLI call failed: %s", e)
             return []
 
     @property
-    def session_cost(self) -> float:
-        return self._session_cost
+    def batches_processed(self) -> int:
+        return self._batches_processed
