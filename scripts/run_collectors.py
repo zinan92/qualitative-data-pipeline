@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from collectors.hackernews import HackerNewsCollector
+from collectors.rss import RSSCollector
 from collectors.substack import SubstackCollector
 from collectors.twitter import TwitterCollector
 from collectors.xueqiu import XueqiuCollector
@@ -21,6 +22,7 @@ COLLECTORS: dict[str, type] = {
     "substack": SubstackCollector,
     "youtube": YouTubeCollector,
     "xueqiu": XueqiuCollector,
+    "rss": RSSCollector,
 }
 
 
