@@ -9,6 +9,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from collectors.github_trending import GitHubTrendingCollector
 from collectors.hackernews import HackerNewsCollector
 from collectors.rss import RSSCollector
 from collectors.substack import SubstackCollector
@@ -23,6 +24,7 @@ COLLECTORS: dict[str, type] = {
     "youtube": YouTubeCollector,
     "xueqiu": XueqiuCollector,
     "rss": RSSCollector,
+    "github": GitHubTrendingCollector,
 }
 
 
