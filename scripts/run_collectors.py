@@ -15,6 +15,7 @@ from collectors.rss import RSSCollector
 from collectors.substack import SubstackCollector
 from collectors.twitter import TwitterCollector
 from collectors.xueqiu import XueqiuCollector
+from collectors.yahoo_finance import YahooFinanceCollector
 from collectors.youtube import YouTubeCollector
 
 COLLECTORS: dict[str, type] = {
@@ -25,6 +26,7 @@ COLLECTORS: dict[str, type] = {
     "xueqiu": XueqiuCollector,
     "rss": RSSCollector,
     "github": GitHubTrendingCollector,
+    "yahoo_finance": YahooFinanceCollector,
 }
 
 
